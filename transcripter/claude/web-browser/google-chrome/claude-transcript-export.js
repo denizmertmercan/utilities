@@ -1,8 +1,11 @@
 /**
- * Claude.ai transcript exporter.
+ * Claude.ai conversation exporter (browser console utility).
  *
- * Paste into the DevTools console while a conversation is open, or save as a
- * bookmarklet / Tampermonkey userscript.
+ * Origin: built for a long Claude.ai chat whose saved HTML/MHTML contained
+ * only the currently mounted messages. The API URL was found in that page's
+ * chat-tree preload script; it is private and can change without notice.
+ * Run while signed in on a claude.ai /chat/<uuid> page: paste this entire file
+ * into Chrome DevTools Console, press Enter, then call exportClaude().
  *
  *   exportClaude()                  -> API, falls back to DOM harvest
  *   exportClaude({ mode: 'dom' })   -> force the DOM harvester
@@ -10,11 +13,18 @@
  *   exportClaude({ format: 'md' })  -> 'md' | 'json' | 'both' (default)
  *   exportClaude({ expandTools: true })  -> DOM mode: click open collapsed blocks
  *
- * Markdown contains conversation text and file names. JSON includes a normalized
- * active-branch export and, when the API succeeds, a raw response archive.
- * Files go to Chrome's configured download location; pasted code cannot infer
- * its own disk path. Chrome may ask permission for multiple downloads.
- * Returns the normalized model for console inspection.
+ * 'both' downloads three files on API success: .md is the active conversation's
+ * user/Claude text (including progress updates) and uploaded filenames, with
+ * no thinking or tool blocks from the API. .json is a simplified active-branch model;
+ * -archive.json is the unmodified API response, including alternate branches,
+ * tool data, and conversation metadata. None downloads uploaded file bytes or
+ * separate artifact files. API failure falls back to scrolling the live DOM:
+ * this may miss content or include rendered tool text, and there is no raw archive.
+ * Files go to Chrome's configured download location, not beside this script:
+ * pasted code cannot infer its own disk path. Chrome may ask permission for
+ * multiple downloads. Outputs can include private conversation text and tool
+ * inputs; review before sharing them.
+ * The function returns the simplified model for inspection in the console.
  */
 (() => {
   'use strict';
@@ -44,6 +54,7 @@
   function conversationIds() {
     const match = new RegExp(`/chat/(${UUID})`, 'i').exec(location.pathname);
     if (!match) throw new Error('Not on a /chat/<uuid> page.');
+    // The page's own preload uses this cookie to address the organization API.
     const org = cookie('lastActiveOrg');
     if (!org || !new RegExp(`^${UUID}$`, 'i').test(org)) {
       throw new Error('No usable lastActiveOrg cookie; use { mode: "dom" }.');
@@ -74,6 +85,7 @@
   // -------------------------------------------------------------- API capture
 
   async function fetchConversation({ org, conversation }) {
+    // Request the complete tree and tool blocks; the Markdown filter runs later.
     const params = new URLSearchParams({
       tree: 'True',
       rendering_mode: 'messages',
@@ -108,6 +120,7 @@
   }
 
   function normalizeBlock(block) {
+    // The readable model is intentionally selective; the archive retains every field.
     const type = block?.type ?? 'text';
     switch (type) {
       case 'text':
@@ -135,6 +148,7 @@
 
   function normalizeFromApi(payload) {
     const raw = payload.chat_messages ?? payload.messages ?? [];
+    // Edited/retried messages may be in the tree but not in the displayed path.
     const ordered = activeBranch(raw, payload.current_leaf_message_uuid);
 
     const turns = ordered.map((message) => {
@@ -198,6 +212,7 @@
   function turnKeyFor(element, role, markdown) {
     const keyed = element.closest('[data-turn-key]');
     if (keyed) return keyed.getAttribute('data-turn-key');
+    // Older or differently rendered rows may lack the stable turn key.
     let hash = 0;
     for (let i = 0; i < markdown.length; i += 1) {
       hash = (hash * 31 + markdown.charCodeAt(i)) | 0;
@@ -222,7 +237,11 @@
       const role = element.getAttribute('data-testid') === 'user-message' ? 'user' : 'assistant';
       if (expandTools) expandCollapsed(element);
 
-      const markdown = htmlToMarkdown(element).trim();
+      const parts = [htmlToMarkdown(element).trim()];
+      for (const block of shadowDiffBlocks(element)) {
+        parts.push(fenceText(diffBlockText(block)));
+      }
+      const markdown = parts.filter(Boolean).join('\n\n');
       if (!markdown) continue;
 
       const key = turnKeyFor(element, role, markdown);
@@ -238,11 +257,43 @@
     }
   }
 
+  function shadowDiffBlocks(root) {
+    const blocks = [];
+
+    function visit(node) {
+      for (const child of node.children || []) {
+        if (child.shadowRoot) {
+          blocks.push(...child.shadowRoot.querySelectorAll('pre[data-file]'));
+          visit(child.shadowRoot);
+        }
+        visit(child);
+      }
+    }
+
+    visit(root);
+    return blocks;
+  }
+
+  function diffBlockText(element) {
+    const content = element.querySelector('[data-content]');
+    if (!content) return element.textContent;
+
+    return [...content.children]
+      .filter((line) => line.hasAttribute('data-line'))
+      .map((line) => {
+        const type = line.getAttribute('data-line-type');
+        const prefix = type === 'addition' ? '+' : type === 'deletion' ? '-' : '';
+        return prefix + line.textContent;
+      })
+      .join('\n');
+  }
+
   async function harvestFromDom({ expandTools = false, step = 0.7, settle = 260 } = {}) {
     const container = scrollContainer();
     const store = new Map();
     const restore = container.scrollTop;
 
+    // Scrolling mounts new transcript rows and unmounts earlier ones.
     container.scrollTop = 0;
     await sleep(settle);
 
@@ -313,7 +364,11 @@
 
   function fence(element) {
     const language = (element.className.match(/language-([\w+#-]+)/) || [])[1] || '';
-    const body = element.textContent.replace(/\n+$/, '');
+    return fenceText(element.textContent, language);
+  }
+
+  function fenceText(text, language = '') {
+    const body = text.replace(/\n+$/, '');
     const ticks = '`'.repeat(Math.max(3, ...(body.match(/`{3,}/g) || ['']).map((m) => m.length + 1)));
     return `\n${ticks}${language}\n${body}\n${ticks}\n\n`;
   }
@@ -433,6 +488,7 @@
     const body = model.turns.map((turn) => {
       const heading = turn.role === 'user' ? '## User' : '## Claude';
       const stamp = turn.createdAt ? ` *(${turn.createdAt})*` : '';
+      // API turns with empty text still get a heading; DOM mode cannot capture empty rows.
       const parts = turn.blocks.map(renderBlock).filter(Boolean);
 
       if (turn.attachments.length) {
@@ -455,6 +511,7 @@
 
     if (mode !== 'dom') {
       try {
+        // Keep the raw response before normalization removes fields and branches.
         archive = await fetchConversation(conversationIds());
         model = normalizeFromApi(archive);
         if (!model.turns.length) throw new Error('API returned zero turns.');
@@ -469,7 +526,11 @@
     }
     if (!model.turns.length) throw new Error('No turns captured.');
 
-    const base = `claude-${slugify(model.title, model.conversationUuid || 'transcript')}`;
+    const timestamp = model.exportedAt
+      .replace(/[-:]/g, '')
+      .replace('T', '-')
+      .replace(/\.\d{3}Z$/, 'Z');
+    const base = `claude-${slugify(model.title, model.conversationUuid || 'transcript')}-${timestamp}`;
     if (format === 'json' || format === 'both') {
       download(`${base}.json`, JSON.stringify(model, null, 2), 'application/json');
       if (archive) {
