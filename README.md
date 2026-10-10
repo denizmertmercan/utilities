@@ -7,6 +7,8 @@ This repository contains various tools and utilities.
 ```text
 .
 ├── README.md
+├── auditor/                                        # transcript auditing
+│   └── intent.md
 ├── file-tools/                                     # file analysis tools
 │   ├── README.md
 │   ├── scripts/
@@ -35,3 +37,7 @@ Dependency-free Python utilities for hashing files and counting lines.
 ### Transcripter
 
 Claude Code transcript export tools and related files.
+
+### Auditor
+
+Intent and workflow notes for quote-based transcript briefings.
