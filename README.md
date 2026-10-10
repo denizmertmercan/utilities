@@ -7,12 +7,23 @@ This repository contains various tools and utilities.
 ```text
 .
 ├── README.md
-└── file-tools/                                     # file analysis tools
-    ├── README.md
-    ├── scripts/
-    │   ├── file_hash.py                            # streaming file hashes
-    │   └── line_count.py                           # UTF-8 line counts
-    └── tests/
+├── file-tools/                                     # file analysis tools
+│   ├── README.md
+│   ├── scripts/
+│   │   ├── file_hash.py                            # streaming file hashes
+│   │   └── line_count.py                           # UTF-8 line counts
+│   └── tests/
+└── transcripter/                                   # transcript exporting
+    ├── claude/                                     # Claude transcript tools
+    │   ├── local/                                  # local environment
+    │   │   ├── code/                               # Code-specific exporter
+    │   │   │   ├── extract-claude-transcript.ps1
+    │   │   │   └── readme.md
+    │   │   └── design/                             # Design-specific exporter
+    │   └── cloud/                                  # cloud environment
+    │       ├── code/                               # Code-specific exporter
+    │       └── design/                             # Design-specific exporter
+    └── outputs/                                    # generated transcript files
 ```
 
 ## Projects
@@ -20,3 +31,7 @@ This repository contains various tools and utilities.
 ### File tools
 
 Dependency-free Python utilities for hashing files and counting lines.
+
+### Transcripter
+
+Claude Code transcript export tools and related files.
